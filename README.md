@@ -170,15 +170,14 @@ Buzzer:  Positive → D9
 ```
 
 ### 2. Software Requirements
-- Install CircuitPython or MicroPython on your microcontroller
+- Install 10.0.3 CircuitPython on your microcontroller
 - Upload code files to the microcontroller
 - Ensure these library files are available:
-  - `board.py`
-  - `busio.py`
-  - `digitalio.py`
-  - `neopixel.py`
-  - `pwmio.py`
-  - `rotary_encoder.py` (must be provided separately)
+  - `adafruit_bus_device` folder
+  - `adafruit_display_text` folder
+  - `adafruit_adxl34x.mpy`
+  - `neopixel.mpy`
+  - `adafruit_displayio_ssd1306.mpy`
 
 ### 3. Running the Game
 - Reset microcontroller to start the game
