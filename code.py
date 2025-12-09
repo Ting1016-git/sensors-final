@@ -499,7 +499,7 @@ class Game:
         # t10: Final level time limit
         self.cfg = {
             0: {'n': 'EASY', 'hp': 6, 't': 60, 'h10': 2, 't10': 30},  # Easy
-            1: {'n': 'MED', 'hp': 2, 't': 30, 'h10': 2, 't10': 15},   # Medium
+            1: {'n': 'MED', 'hp': 4, 't': 30, 'h10': 2, 't10': 15},   # Medium
             2: {'n': 'HARD', 'hp': 2, 't': 15, 'h10': 1, 't10': 15}   # Hard
         }
         
@@ -669,7 +669,7 @@ class Game:
                 self.dsp.hline(5, 11 + self.OFS, 118, 1)  # Separator line
                 
                 # Difficulty options
-                nm = ["EASY 6HP", "MED 2HP", "HARD 2HP"]  # Display name and HP
+                nm = ["EASY 6HP", "MED 4HP", "HARD 2HP"]  # Display name and HP
                 tm = ["60S", "30S", "15S"]                # Time limits
                 
                 for i in range(3):

@@ -33,7 +33,7 @@ Treasure Hunt is an embedded game project built with MicroPython/CircuitPython, 
 2. Press any button to enter main menu
 3. Use rotary encoder to select difficulty:
    - **EASY**: 6 HP, 60 seconds per level
-   - **MEDIUM**: 2 HP, 30 seconds per level
+   - **MEDIUM**: 4 HP, 30 seconds per level
    - **HARD**: 2 HP, 15 seconds per level
 4. Press button to confirm selection
 
