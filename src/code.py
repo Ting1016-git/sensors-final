@@ -6,6 +6,7 @@ import digitalio
 import neopixel
 import pwmio
 from rotary_encoder import RotaryEncoder
+import adafruit_adxl34x
 
 # =============================================================================
 # Buzzer Class
@@ -123,6 +124,25 @@ class Buzzer:
     # -------------------------------------------------------------------------
     def warn(self):
         self.tone(800, 0.1)  # 800Hz, 100ms
+    
+    # -------------------------------------------------------------------------
+    # Disarm success sound effect
+    # -------------------------------------------------------------------------
+    # Played when bomb is successfully disarmed
+    # Quick ascending chirp indicating success
+    # -------------------------------------------------------------------------
+    def disarm_success(self):
+        for f in [600, 800, 1000]:
+            self.tone(f, 0.06)
+    
+    # -------------------------------------------------------------------------
+    # Ticking sound effect
+    # -------------------------------------------------------------------------
+    # Played during bomb disarm sequence
+    # Short tick sound
+    # -------------------------------------------------------------------------
+    def tick(self):
+        self.tone(1000, 0.03)
 
 
 # =============================================================================
@@ -326,7 +346,7 @@ class SSD1306:
             '!':[0,0,0x5F,0,0],             '?':[2,1,0x51,9,6],
             ':':[0,0x36,0x36,0,0],          '-':[8,8,8,8,8],
             '>':[8,0x14,0x22,0x41,0],       '/':[0x20,0x10,8,4,2],
-            '+':[8,8,0x3E,8,8]
+            '+':[8,8,0x3E,8,8],             '.':[0,0x60,0x60,0,0]
         }
         cx = x  # Current drawing position
         for ch in s:
@@ -449,12 +469,15 @@ class Game:
     def __init__(self):
         # ===================== Hardware Initialization =====================
         
-        # Initialize I2C bus (for OLED display)
+        # Initialize I2C bus (for OLED display and accelerometer)
         self.i2c = busio.I2C(board.SCL, board.SDA)
         time.sleep(0.1)  # Wait for I2C to stabilize
         
         # OLED Display
         self.dsp = SSD1306(self.i2c)
+        
+        # Accelerometer (ADXL345)
+        self.accel = adafruit_adxl34x.ADXL345(self.i2c)
         
         # Rotary encoder (for cursor movement)
         # D0, D1: Encoder signal pins
@@ -490,6 +513,15 @@ class Game:
         self.lv = 1        # Current level
         self.hp = 6        # Current health points
         self.sc = 0        # Current score
+        
+        # ===================== Shake Event Variables =====================
+        
+        self.shake_event_available = False  # One event per level in easy mode
+        self.bomb_disarm_active = False     # Whether player is currently disarming
+        self.shake_threshold = 2.0          # Acceleration threshold for shake (m/s²)
+        self.shake_start_time = 0           # When disarm started
+        self.shake_duration = 3.0           # 3 seconds to shake and disarm
+        self.last_tick_time = 0             # For ticking sound effect
         
         # ===================== Difficulty Configuration =====================
         # n: Difficulty name
@@ -527,6 +559,49 @@ class Game:
         self.tlm = 60      # Current time limit
         self.fch = 0       # Final level choice (0 or 1)
         self.fhp = 2       # Final level HP
+    
+    # -------------------------------------------------------------------------
+    # Check if device is being shaken
+    # -------------------------------------------------------------------------
+    # Returns: True if shake detected, False otherwise
+    # 
+    # Calculates magnitude of acceleration and compares to threshold
+    # -------------------------------------------------------------------------
+    def check_shake(self):
+        try:
+            x, y, z = self.accel.acceleration
+            # Calculate total acceleration magnitude
+            magnitude = (x**2 + y**2 + z**2)**0.5
+            
+            # Check if magnitude significantly exceeds gravity (9.8 m/s²)
+            # This indicates shaking motion
+            if magnitude > (9.8 + self.shake_threshold):
+                return True
+        except:
+            pass  # Ignore sensor errors
+        return False
+    
+    # -------------------------------------------------------------------------
+    # Display disarm prompt
+    # -------------------------------------------------------------------------
+    # Shows shake instruction and countdown timer
+    # -------------------------------------------------------------------------
+    def display_disarm_prompt(self):
+        self.dsp.clear()
+        
+        # Show bomb icon
+        self.dsp.bomb(52, 8)
+        
+        # Show instruction
+        self.dsp.txt("SHAKE TO", 32, 30, 1)
+        self.dsp.txt("DISARM!", 38, 42, 1)
+        
+        # Show countdown
+        elapsed = time.monotonic() - self.shake_start_time
+        time_left = self.shake_duration - elapsed
+        self.dsp.txt("{:.1f}S".format(max(0, time_left)), 50, 54, 1)
+        
+        self.dsp.show()
     
     # -------------------------------------------------------------------------
     # Check button press
@@ -604,28 +679,107 @@ class Game:
     # -------------------------------------------------------------------------
     # Welcome screen
     # -------------------------------------------------------------------------
-    # Displays game title and icons, waits for player to press button to start
+    # Displays animated game title and icons, waits for player to press button to start
     # -------------------------------------------------------------------------
     def welcome(self):
-        self.dsp.clear()
+        # ===== Animation Phase 1: Title fade in =====
+        for brightness in range(0, 2):  # Two brightness levels
+            self.dsp.clear()
+            
+            # Display game title
+            self.dsp.txt("TREASURE", 25, 10 + self.OFS, 1)
+            self.dsp.txt("HUNT", 45, 22 + self.OFS, 1)
+            
+            self.dsp.show()
+            time.sleep(0.2)
         
-        # Display game title
-        self.dsp.txt("TREASURE", 25, 10 + self.OFS, 1)
-        self.dsp.txt("HUNT", 45, 22 + self.OFS, 1)
-        
-        # Display chest and bomb icons
-        self.dsp.chest(25, 38)   # Left chest
-        self.dsp.bomb(85, 36)    # Right bomb
-        
-        self.dsp.show()
+        # ===== Animation Phase 2: Chest opening animation =====
         self.led.fill((255, 215, 0))  # Gold LED
         self.buz.startup()            # Play startup music
-        time.sleep(1.5)
         
-        # Show "press button" prompt
+        # Animate chest opening
+        for frame in range(3):
+            self.dsp.clear()
+            
+            # Title stays
+            self.dsp.txt("TREASURE", 25, 10 + self.OFS, 1)
+            self.dsp.txt("HUNT", 45, 22 + self.OFS, 1)
+            
+            # Chest animation: closed -> partially open -> fully open
+            if frame == 0:
+                self.dsp.chest(25, 38, False)  # Closed
+            elif frame == 1:
+                # Draw partially open chest (custom)
+                self.dsp.rect(25, 38 + 4, 16, 8, 1)      # Body
+                self.dsp.hline(25 + 4, 38 + 8, 8, 1)     # Bottom line
+                self.dsp.frect(25 + 6, 38 + 6, 4, 3, 1)  # Lock
+                self.dsp.hline(25 + 2, 38 + 1, 12, 1)    # Lid partially open
+                self.dsp.rect(25, 38 + 2, 16, 3, 1)
+                self.dsp.px(25 + 8, 38 - 1, 1)           # Small sparkle
+            else:
+                self.dsp.chest(25, 38, True)   # Fully open
+            
+            # Bomb icon (static for now)
+            self.dsp.bomb(85, 36)
+            
+            self.dsp.show()
+            time.sleep(0.4)
+        
+        # ===== Animation Phase 3: Sparkle and bomb fuse animation =====
+        for frame in range(5):
+            self.dsp.clear()
+            
+            # Title
+            self.dsp.txt("TREASURE", 25, 10 + self.OFS, 1)
+            self.dsp.txt("HUNT", 45, 22 + self.OFS, 1)
+            
+            # Open chest with sparkles
+            self.dsp.chest(25, 38, True)
+            
+            # Animated bomb fuse (alternating spark positions)
+            bomb_x, bomb_y = 85, 36
+            
+            # Draw bomb body
+            for dy in range(8):
+                for dx in range(8):
+                    if (dx - 4) ** 2 + (dy - 4) ** 2 <= 16:
+                        self.dsp.px(bomb_x + dx + 2, bomb_y + dy + 6, 1)
+            
+            # Draw fuse base
+            self.dsp.frect(bomb_x + 4, bomb_y + 3, 4, 4, 1)
+            self.dsp.px(bomb_x + 6, bomb_y + 2, 1)
+            self.dsp.px(bomb_x + 7, bomb_y + 1, 1)
+            self.dsp.px(bomb_x + 8, bomb_y, 1)
+            
+            # Animated spark (blinks on and off)
+            if frame % 2 == 0:
+                self.dsp.px(bomb_x + 9, bomb_y, 1)
+                self.dsp.px(bomb_x + 8, bomb_y - 1, 1)
+                self.dsp.px(bomb_x + 10, bomb_y - 1, 1)  # Extra spark
+            else:
+                self.dsp.px(bomb_x + 9, bomb_y, 1)
+                self.dsp.px(bomb_x + 8, bomb_y - 1, 1)
+            
+            self.dsp.show()
+            
+            # Pulse LED color between gold and orange
+            if frame % 2 == 0:
+                self.led.fill((255, 215, 0))  # Gold
+            else:
+                self.led.fill((255, 140, 0))  # Orange
+            
+            time.sleep(0.15)
+        
+        # ===== Final state: Show press button prompt =====
+        self.dsp.clear()
+        self.dsp.txt("TREASURE", 25, 10 + self.OFS, 1)
+        self.dsp.txt("HUNT", 45, 22 + self.OFS, 1)
+        self.dsp.chest(25, 38, True)   # Open chest
+        self.dsp.bomb(85, 36)           # Bomb
         self.dsp.txt("PRESS BTN", 28, 54, 1)
         self.dsp.show()
-        self.led.fill((0, 0, 0))  # Turn off LED
+        
+        self.led.fill((0, 255, 0))  # Green LED to indicate ready
         
         # Clear encoder buffer (avoid accumulated rotation affecting)
         for _ in range(10):
@@ -635,11 +789,19 @@ class Game:
             self.bl = self.btn.value
             time.sleep(0.05)
         
-        # Wait for player to press button
+        # ===== Wait for player to press button with pulsing LED =====
+        start_wait = time.monotonic()
         while not self.cbtn():
             self.enc.update()
+            
+            # Pulsing green LED effect while waiting
+            elapsed = time.monotonic() - start_wait
+            pulse = int(50 + 205 * abs((elapsed % 1.0) - 0.5) * 2)
+            self.led.fill((0, pulse, 0))
+            
             time.sleep(0.01)
         
+        self.led.fill((0, 0, 0))  # Turn off LED
         self.st = 'MENU'  # Enter menu state
     
     # -------------------------------------------------------------------------
@@ -740,6 +902,12 @@ class Game:
         self.hp = c['hp']     # Reset HP
         self.tlm = c['t']     # Reset time limit
         
+        # Reset shake event for easy mode
+        if self.df == 0:  # Easy mode
+            self.shake_event_available = True
+        else:
+            self.shake_event_available = False
+        
         # Get level configuration
         r, co, tr, bm, _ = self.lvl[self.lv]  # rows, cols, treasures, bombs, needed
         
@@ -763,6 +931,7 @@ class Game:
         self.pos = [0, 0]              # Reset cursor
         self.fnd = 0                   # Reset treasures found
         self.stm = time.monotonic()    # Record start time
+        self.bomb_disarm_active = False  # Reset disarm state
     
     # -------------------------------------------------------------------------
     # Main game logic
@@ -787,6 +956,73 @@ class Game:
         
         while self.st == 'PLAY':
             now = time.monotonic()
+            
+            # ===== Handle Bomb Disarm Sequence =====
+            if self.bomb_disarm_active:
+                elapsed = now - self.shake_start_time
+                
+                # Play ticking sound every 0.5 seconds
+                if now - self.last_tick_time > 0.5:
+                    self.buz.tick()
+                    self.last_tick_time = now
+                
+                # Pulsing red LED during disarm
+                pulse = int(128 + 127 * abs((now % 0.5) / 0.5 - 0.5))
+                self.led.fill((pulse, 0, 0))
+                
+                if elapsed >= self.shake_duration:
+                    # Time's up - bomb explodes
+                    self.bomb_disarm_active = False
+                    self.dsp.clear()
+                    self.dsp.txt("FAILED!", 40, 28, 1)
+                    self.dsp.show()
+                    self.buz.bomb()
+                    self.hp -= 1
+                    
+                    # Flash red
+                    for _ in range(3):
+                        self.led.fill((255, 0, 0))
+                        time.sleep(0.1)
+                        self.led.fill((0, 0, 0))
+                        time.sleep(0.1)
+                    
+                    self.uled()
+                    
+                    if self.hp <= 0:
+                        self.st = 'OVER'
+                    else:
+                        time.sleep(0.5)
+                        self.draw()
+                        ld = now
+                    
+                elif self.check_shake():
+                    # Successfully disarmed!
+                    self.bomb_disarm_active = False
+                    self.dsp.clear()
+                    self.dsp.txt("DISARMED!", 30, 22, 1)
+                    self.dsp.txt("+100 PTS", 32, 36, 1)
+                    self.dsp.show()
+                    self.buz.disarm_success()
+                    
+                    # Flash green
+                    self.led.fill((0, 255, 0))
+                    time.sleep(1)
+                    
+                    # Award bonus points
+                    self.sc += 100
+                    
+                    self.uled()
+                    self.draw()
+                    ld = now
+                
+                else:
+                    # Continue disarm sequence - update display
+                    self.display_disarm_prompt()
+                
+                time.sleep(0.01)
+                continue
+            
+            # ===== Normal Game Logic =====
             
             # Calculate remaining time
             el = int(now - self.stm)           # Elapsed time
@@ -1051,6 +1287,11 @@ class Game:
         self.dsp.txt("{}S".format(rm), 22, ty, 1)           # Remaining time
         self.dsp.txt("H:{}".format(self.hp), 52, ty, 1)     # HP
         self.dsp.txt("{}/{}".format(self.fnd, nd), 90, ty, 1)  # Treasure progress
+        
+        # Show shake event indicator if available (easy mode only)
+        if self.shake_event_available:
+            self.dsp.txt("*", 120, ty, 1)  # Star indicator
+        
         self.dsp.hline(0, ty + 9, 128, 1)                   # Separator
         
         # ===== Calculate grid size and position =====
@@ -1114,7 +1355,7 @@ class Game:
     # Dig at current position
     # -------------------------------------------------------------------------
     # Reveals content at current cursor position
-    # Treasure=add score, Bomb=lose HP
+    # Treasure=add score, Bomb=lose HP (or trigger disarm event in easy mode)
     # -------------------------------------------------------------------------
     def dig(self):
         r, c = self.pos
@@ -1136,16 +1377,26 @@ class Game:
             self.uled()
             
         elif self.grd[r][c] == 'B':  # Hit bomb
-            self.hp -= 1          # Lose HP
-            self.buz.bomb()       # Play explosion sound
-            
-            # Flash red LED rapidly
-            for _ in range(3):
-                self.led.fill((255, 0, 0))
-                time.sleep(0.1)
-                self.led.fill((0, 0, 0))
-                time.sleep(0.1)
-            self.uled()
+            # Check if shake event is available (easy mode only)
+            if self.shake_event_available:
+                # Trigger disarm sequence
+                self.bomb_disarm_active = True
+                self.shake_start_time = time.monotonic()
+                self.last_tick_time = time.monotonic()
+                self.shake_event_available = False  # Use up the event
+                self.display_disarm_prompt()
+            else:
+                # Normal bomb behavior - lose HP
+                self.hp -= 1          # Lose HP
+                self.buz.bomb()       # Play explosion sound
+                
+                # Flash red LED rapidly
+                for _ in range(3):
+                    self.led.fill((255, 0, 0))
+                    time.sleep(0.1)
+                    self.led.fill((0, 0, 0))
+                    time.sleep(0.1)
+                self.uled()
     
     # -------------------------------------------------------------------------
     # Update LED color (based on HP)
